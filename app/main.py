@@ -78,14 +78,14 @@ def api_transcribe(video: UploadFile = File(...)):
     try:
         video_path = pipeline.save_upload(video.file, video.filename)
         result = pipeline.transcribe_video(video_path)
-        stem = os.path.splitext(os.path.basename(video.filename))[0]
+        stem = os.path.splitext(video_path.name)[0]
         transcript_file = f"{stem}_transcript.json"
         pipeline.save_json(result, transcript_file)
         return _ok(
             {
                 "transcript": result,
                 "transcript_file": transcript_file,
-                "video_name": os.path.basename(video.filename),
+                "video_name": video_path.name,
             }
         )
     except PipelineError as e:
@@ -129,8 +129,8 @@ def api_translate(
 def api_upload_video(video: UploadFile = File(...)):
     """For ekspertmodus: last opp video uten å transkribere."""
     try:
-        pipeline.save_upload(video.file, video.filename)
-        return _ok({"video_name": os.path.basename(video.filename)})
+        video_path = pipeline.save_upload(video.file, video.filename)
+        return _ok({"video_name": video_path.name})
     except PipelineError as e:
         return _err(str(e))
     except Exception as e:  # noqa: BLE001

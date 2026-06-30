@@ -18,7 +18,7 @@ const state = {
     capabilities: {},
 };
 
-let elapsedTimer = null;
+const elapsedTimers = {};
 
 /* ---------- Logg & status ---------- */
 function log(msg) {
@@ -27,13 +27,18 @@ function log(msg) {
     el.textContent += `\n› ${t}  ${msg}`;
     el.scrollTop = el.scrollHeight;
 }
-function stopElapsed() {
-    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+function stopElapsed(id) {
+    if (id) {
+        if (elapsedTimers[id]) { clearInterval(elapsedTimers[id]); delete elapsedTimers[id]; }
+    } else {
+        Object.keys(elapsedTimers).forEach((k) => { clearInterval(elapsedTimers[k]); delete elapsedTimers[k]; });
+    }
 }
 function setStatus(id, kind, msg) {
     const el = $(id);
     el.hidden = false;
     el.className = "status" + (kind === "error" ? " error" : kind === "ok" ? " ok" : "");
+    stopElapsed(id);
     if (kind === "loading") {
         const started = Date.now();
         const render = () => {
@@ -41,15 +46,13 @@ function setStatus(id, kind, msg) {
             const m = Math.floor(s / 60);
             el.innerHTML = `<span class="spinner"></span><span>${msg}</span><span class="elapsed">${m}:${String(s % 60).padStart(2, "0")}</span>`;
         };
-        stopElapsed();
         render();
-        elapsedTimer = setInterval(render, 1000);
+        elapsedTimers[id] = setInterval(render, 1000);
     } else {
-        stopElapsed();
         el.innerHTML = `<span>${msg}</span>`;
     }
 }
-function hide(id) { stopElapsed(); $(id).hidden = true; }
+function hide(id) { stopElapsed(id); $(id).hidden = true; }
 function setStep(id, st) { $(id).dataset.state = st; }
 function setBadge(id, text) { $(id).textContent = text; }
 
@@ -156,13 +159,16 @@ $("tabbtn-dub").parentElement.addEventListener("keydown", (e) => {
 });
 
 /* ---------- Innstillinger-modal ---------- */
-function openModal() { $("api-key").value = getKey(); $("settings-modal").hidden = false; $("api-key").focus(); }
-function closeModal() { $("settings-modal").hidden = true; $("settings-btn").focus(); }
+function setBgInert(on) {
+    document.querySelectorAll("header.topbar, nav.tabs, main.container").forEach((el) => { el.inert = on; });
+}
+function openModal() { $("api-key").value = getKey(); $("settings-modal").hidden = false; setBgInert(true); $("api-key").focus(); }
+function closeModal() { $("settings-modal").hidden = true; setBgInert(false); $("settings-btn").focus(); }
 $("settings-btn").addEventListener("click", openModal);
 $("settings-cancel").addEventListener("click", closeModal);
 $("settings-save").addEventListener("click", () => {
     localStorage.setItem(API_KEY_STORE, $("api-key").value.trim());
-    $("settings-modal").hidden = true;
+    closeModal();
     log("API-nøkkel lagret lokalt.");
     loadHealth();
 });
@@ -193,6 +199,19 @@ function resetAll() {
     setStep("step-1", "active"); setBadge("badge-1", "Klar");
     setStep("step-2", "locked"); setBadge("badge-2", "Låst");
     setStep("step-3", "locked"); setBadge("badge-3", "Låst");
+    // Steg 2/3-kontroller tilbake til utgangspunkt
+    $("voice-select").selectedIndex = 0;
+    $("openrouter-tts").hidden = true;
+    $("test-mode").checked = true;
+    const teSel = $("translate-engine");
+    const localOpt = teSel.querySelector('option[value="local"]');
+    teSel.value = localOpt && localOpt.disabled ? "openrouter" : "local";
+    // Tospråklig voiceover-fanen
+    $("dual-json").value = "";
+    $("dual-result").hidden = true;
+    $("audio-no").removeAttribute("src"); $("audio-sv").removeAttribute("src");
+    $("dl-no").removeAttribute("href"); $("dl-sv").removeAttribute("href");
+    $("text-no").textContent = ""; $("text-sv").textContent = "";
     $("log").textContent = "› Klar.";
     activateTab("dub");
     log("Nullstilt.");
@@ -210,7 +229,11 @@ function downloadText(filename, text, mime) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 $("btn-dl-no").addEventListener("click", () => downloadText(`${state.stem}_no.txt`, state.noText || ""));
-$("btn-dl-sv").addEventListener("click", () => downloadText(`${state.stem}_sv.json`, $("sv-edit").value, "application/json"));
+$("btn-dl-sv").addEventListener("click", () => {
+    const v = $("sv-edit").value.trim();
+    if (!v) { alert("Ingen svensk transkripsjon å laste ned ennå."); return; }
+    downloadText(`${state.stem}_sv.json`, v, "application/json");
+});
 
 /* ---------- Steg 1: video ---------- */
 const dropzone = $("dropzone");
@@ -313,8 +336,9 @@ function unlockDub(badge) {
     setStep("step-3", "active");
     setBadge("badge-3", badge);
     $("btn-dub").disabled = false;
-    $("btn-dl-sv").hidden = false;
 }
+// Vis «last ned svensk JSON» kun når det faktisk finnes innhold (dekker ekspertmodus/redigering)
+$("sv-edit").addEventListener("input", () => { $("btn-dl-sv").hidden = !$("sv-edit").value.trim(); });
 
 /* ---------- Ekspertmodus ---------- */
 $("btn-expert").addEventListener("click", async () => {

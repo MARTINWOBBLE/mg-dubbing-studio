@@ -4,12 +4,14 @@ services:
     ports:
       - "8080:8080"
     env_file:
-      - .env
+      # .env er valgfri – alle verdier har fornuftige standarder i config.py
+      - path: .env
+        required: false
     volumes:
       - ./uploads:/app/uploads
       - ./output:/app/output
-      # Cache HuggingFace-modeller mellom kjøringer
-      - hf_cache:/root/.cache/huggingface
+      # Cache HuggingFace-modeller mellom kjøringer (matcher HF_HOME i Dockerfile)
+      - hf_cache:/cache/huggingface
 
 volumes:
   hf_cache:

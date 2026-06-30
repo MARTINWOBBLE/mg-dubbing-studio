@@ -97,12 +97,11 @@ def _get_mt():
 # ---------------------------------------------------------------------------
 # Tidsstempel-hjelpere (robuste mot None / manglende felt fra Whisper)
 # ---------------------------------------------------------------------------
-def _seg_start_ms(chunk: dict, index: int) -> int:
+def _seg_start_ms(chunk: dict) -> Optional[int]:
+    """Starttid i ms, eller None hvis segmentet mangler gyldig tidsstempel."""
     ts = chunk.get("timestamp")
     if not isinstance(ts, (list, tuple)) or len(ts) < 1 or ts[0] is None:
-        raise PipelineError(
-            f"Segment {index + 1} mangler gyldig starttidspunkt i «timestamp» [start, slutt]."
-        )
+        return None
     return int(float(ts[0]) * 1000)
 
 
@@ -115,7 +114,8 @@ def _last_end_seconds(chunks: list, video_duration: float) -> float:
             end = float(ts[1])
     if end is None or end <= 0:
         end = video_duration
-    return max(1.0, min(end + 2.0, video_duration))
+    # Aldri lengre enn selve videoen (kan ikke subklippe forbi kilden).
+    return min(end + 2.0, video_duration)
 
 
 # ---------------------------------------------------------------------------
@@ -308,17 +308,23 @@ def dub_video(
         raise PipelineError("edge-tts mangler. Installer requirements.txt.")
 
     output_path = config.OUTPUT_DIR / output_name
-    video = None
+    base_video = None
+    render_clip = None
     try:
-        video = VideoFileClip(str(video_path))
-        full_audio = AudioSegment.silent(duration=int(video.duration * 1000), frame_rate=24000)
+        base_video = VideoFileClip(str(video_path))
+        full_audio = AudioSegment.silent(duration=int(base_video.duration * 1000), frame_rate=24000)
 
         with tempfile.TemporaryDirectory() as tmp:
+            placed = 0
+            last_end_ms = 0
             for i, chunk in enumerate(chunks):
                 text = (chunk.get("text") or "").strip()
                 if not text:
                     continue
-                start_ms = _seg_start_ms(chunk, i)
+                start_ms = _seg_start_ms(chunk)
+                if start_ms is None:
+                    logger.warning("Segment %d mangler starttidspunkt; bruker forrige sluttid.", i + 1)
+                    start_ms = last_end_ms
                 if use_openrouter:
                     pcm = _tts_segment_openrouter(text, api_key, openrouter_model, openrouter_voice)
                     seg = AudioSegment(data=pcm, sample_width=2, frame_rate=24000, channels=1)
@@ -327,11 +333,19 @@ def dub_video(
                     _edge_save_sync(text, voice, seg_path)
                     seg = AudioSegment.from_mp3(seg_path)
                 full_audio = full_audio.overlay(seg, position=start_ms)
+                last_end_ms = start_ms + len(seg)
+                placed += 1
 
+            if placed == 0:
+                raise PipelineError(
+                    "Ingen segmenter hadde tekst og gyldige tidsstempler å dubbe."
+                )
+
+            render_clip = base_video
             if test_mode:
-                last_end_s = _last_end_seconds(chunks, video.duration)
+                last_end_s = _last_end_seconds(chunks, base_video.duration)
                 full_audio = full_audio[: int(last_end_s * 1000)]
-                video = video.subclipped(0, last_end_s)
+                render_clip = base_video.subclipped(0, last_end_s)
 
             mixed = os.path.join(tmp, "mixed.wav")
             full_audio.export(mixed, format="wav")
@@ -342,7 +356,7 @@ def dub_video(
             final = None
             try:
                 audio_clip = AudioFileClip(mixed)
-                final = video.with_audio(audio_clip)
+                final = render_clip.with_audio(audio_clip)
                 final.write_videofile(
                     str(output_path),
                     codec="libx264",
@@ -359,11 +373,13 @@ def dub_video(
                         except Exception:  # noqa: BLE001
                             pass
     finally:
-        if video is not None:
-            try:
-                video.close()
-            except Exception:  # noqa: BLE001
-                pass
+        # Lukk både evt. subklipp (render_clip) og originalen (base_video).
+        for clip in {id(render_clip): render_clip, id(base_video): base_video}.values():
+            if clip is not None:
+                try:
+                    clip.close()
+                except Exception:  # noqa: BLE001
+                    pass
     return output_name
 
 
@@ -423,8 +439,9 @@ def dual_voiceover(
 # Hjelpere for lagring og opprydding
 # ---------------------------------------------------------------------------
 def save_upload(file_obj, filename: str) -> Path:
-    safe = os.path.basename(filename) or f"upload_{uuid.uuid4().hex[:8]}"
-    dest = config.UPLOAD_DIR / safe
+    # Unikt lagringsnavn så samtidige/gjentatte opplastinger ikke overskriver hverandre.
+    safe = os.path.basename(filename) or "upload"
+    dest = config.UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{safe}"
     limit = config.MAX_UPLOAD_MB * 1024 * 1024
     written = 0
     with open(dest, "wb") as buf:

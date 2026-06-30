@@ -7,8 +7,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Pin HuggingFace-cache til en fast sti (matcher volumet i docker-compose)
+ENV HF_HOME=/cache/huggingface
+RUN mkdir -p /cache/huggingface
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# CPU-only torch (containeren har ikke GPU) – unngår flere GB med CUDA-bibliotek
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 RUN mkdir -p uploads output
