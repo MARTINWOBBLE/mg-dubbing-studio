@@ -1,0 +1,10 @@
+# Kun web-laget – nok til å starte serveren og UI-et (uten lokale ML-modeller).
+# Nyttig for rask testing eller når man kun bruker OpenRouter + edge-tts.
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+requests
+edge-tts
+moviepy
+pydub

@@ -1,0 +1,15 @@
+services:
+  mg-dubbing-studio:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./uploads:/app/uploads
+      - ./output:/app/output
+      # Cache HuggingFace-modeller mellom kjøringer
+      - hf_cache:/root/.cache/huggingface
+
+volumes:
+  hf_cache:

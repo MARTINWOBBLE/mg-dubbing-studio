@@ -1,0 +1,20 @@
+# Full installasjon (inkl. lokale ML-modeller)
+# Web-laget alene: se requirements-web.txt
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+requests
+
+# Media
+moviepy
+pydub
+
+# Tekst-til-tale (gratis, ingen nøkkel)
+edge-tts
+
+# Lokale modeller (transkribering + oversettelse)
+torch
+transformers
+sentencepiece
+librosa

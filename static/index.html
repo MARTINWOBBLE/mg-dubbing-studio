@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="nb">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MG Dubbing Studio | Mestergruppen</title>
+    <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <img src="/static/logo.svg" alt="Mestergruppen" width="36" height="36">
+            <div class="brand-text">
+                <strong>MG Dubbing Studio</strong>
+                <span>Mestergruppen · transkriber, oversett &amp; dubb NO → SV</span>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <span id="health-pill" class="pill pill-muted">Sjekker miljø…</span>
+            <button id="settings-btn" class="icon-btn" title="Innstillinger" aria-label="Innstillinger">⚙</button>
+        </div>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab active" data-tab="dub">🎬 Dubb video</button>
+        <button class="tab" data-tab="dual">🔊 Tospråklig voiceover</button>
+    </nav>
+
+    <main class="container">
+        <!-- capability banner -->
+        <div id="cap-banner" class="banner banner-info" hidden></div>
+
+        <!-- ============ TAB: DUBB VIDEO ============ -->
+        <section id="tab-dub" class="tab-panel active">
+            <!-- STEG 1 -->
+            <article class="step card" id="step-1" data-state="active">
+                <div class="step-head">
+                    <span class="step-num">1</span>
+                    <h2>Kildevideo</h2>
+                    <span class="badge" id="badge-1">Klar</span>
+                </div>
+                <p class="muted">Last opp den norske videoveiledningen du vil dubbe til svensk.</p>
+                <div class="dropzone" id="dropzone">
+                    <div class="dropzone-icon">⬆</div>
+                    <div><strong>Slipp MP4 her</strong> eller klikk for å velge</div>
+                    <input type="file" id="video-input" accept="video/mp4,video/*" hidden>
+                </div>
+                <div class="file-info" id="video-info" hidden></div>
+                <div class="step-actions">
+                    <button class="btn btn-primary" id="btn-transcribe" disabled>Start transkribering</button>
+                    <button class="btn btn-ghost" id="btn-expert">Ekspertmodus: hopp til redigering</button>
+                </div>
+                <div class="status" id="status-1" hidden></div>
+            </article>
+
+            <!-- STEG 2 -->
+            <article class="step card" id="step-2" data-state="locked">
+                <div class="step-head">
+                    <span class="step-num">2</span>
+                    <h2>Norsk transkripsjon</h2>
+                    <span class="badge" id="badge-2">Låst</span>
+                </div>
+                <div class="transcript-preview" id="no-preview">
+                    <div class="placeholder">Fullfør steg 1 for å se transkripsjonen.</div>
+                </div>
+                <div class="field-row">
+                    <label for="translate-engine">Oversetter</label>
+                    <select id="translate-engine">
+                        <option value="local">Lokal modell (Helsinki-NLP · gratis)</option>
+                        <option value="openrouter">OpenRouter / Gemini (krever nøkkel)</option>
+                    </select>
+                </div>
+                <div class="step-actions">
+                    <button class="btn btn-primary" id="btn-translate" disabled>Oversett til svensk</button>
+                </div>
+                <div class="status" id="status-2" hidden></div>
+            </article>
+
+            <!-- STEG 3 -->
+            <article class="step card" id="step-3" data-state="locked">
+                <div class="step-head">
+                    <span class="step-num">3</span>
+                    <h2>Svensk dubbing</h2>
+                    <span class="badge" id="badge-3">Låst</span>
+                </div>
+                <p class="muted">Se over og rediger den svenske teksten før lyden genereres.</p>
+                <textarea id="sv-edit" class="code-area" spellcheck="false" placeholder="Svensk transkripsjon (JSON) vises her…"></textarea>
+
+                <div class="field-grid">
+                    <div class="field-row">
+                        <label for="voice-select">Stemme</label>
+                        <select id="voice-select"></select>
+                    </div>
+                    <div class="field-row checkbox">
+                        <label><input type="checkbox" id="test-mode" checked> Testmodus (3 første setninger)</label>
+                    </div>
+                </div>
+
+                <div id="openrouter-tts" class="subpanel" hidden>
+                    <div class="field-row">
+                        <label for="or-model">OpenRouter modell-ID</label>
+                        <input type="text" id="or-model" value="google/gemini-3.1-flash-tts-preview">
+                    </div>
+                    <div class="field-row">
+                        <label for="or-voice">Stemmenavn</label>
+                        <input type="text" id="or-voice" value="Achird">
+                    </div>
+                </div>
+
+                <div class="step-actions">
+                    <button class="btn btn-primary" id="btn-dub" disabled>Generer dubbet video</button>
+                </div>
+                <div class="status" id="status-3" hidden></div>
+            </article>
+
+            <!-- RESULTAT -->
+            <article class="step card result" id="result-card" hidden>
+                <div class="step-head">
+                    <span class="step-num">✓</span>
+                    <h2>Ferdig resultat</h2>
+                </div>
+                <video id="result-video" controls></video>
+                <div class="step-actions">
+                    <a class="btn btn-primary" id="btn-download" download>⬇ Last ned svensk video</a>
+                </div>
+            </article>
+        </section>
+
+        <!-- ============ TAB: TOSPRÅKLIG VOICEOVER ============ -->
+        <section id="tab-dual" class="tab-panel">
+            <article class="step card" data-state="active">
+                <div class="step-head">
+                    <span class="step-num">♪</span>
+                    <h2>Tospråklig voiceover</h2>
+                </div>
+                <p class="muted">Lim inn eller last opp en transkripsjon (JSON). Verktøyet oversetter til svensk og lager én norsk og én svensk lydfil. Krever OpenRouter-nøkkel.</p>
+                <div class="step-actions" style="justify-content:flex-start">
+                    <button class="btn btn-ghost" id="btn-load-json">Last opp JSON-fil</button>
+                    <input type="file" id="dual-json-input" accept="application/json" hidden>
+                </div>
+                <textarea id="dual-json" class="code-area" spellcheck="false" placeholder='{ "chunks": [ { "text": "…" } ] }  eller  { "text": "…" }'></textarea>
+                <div class="field-grid">
+                    <div class="field-row">
+                        <label for="dual-voice">Stemme (OpenRouter)</label>
+                        <input type="text" id="dual-voice" value="Puck">
+                    </div>
+                    <div class="field-row">
+                        <label for="dual-model">Modell-ID</label>
+                        <input type="text" id="dual-model" value="google/gemini-3.1-flash-tts-preview">
+                    </div>
+                </div>
+                <div class="step-actions">
+                    <button class="btn btn-primary" id="btn-dual">Generer NO + SV lyd</button>
+                </div>
+                <div class="status" id="status-dual" hidden></div>
+
+                <div id="dual-result" class="dual-result" hidden>
+                    <div class="dual-col">
+                        <h3>🇳🇴 Norsk</h3>
+                        <audio id="audio-no" controls></audio>
+                        <a class="btn btn-ghost btn-sm" id="dl-no" download>Last ned</a>
+                        <p class="dual-text" id="text-no"></p>
+                    </div>
+                    <div class="dual-col">
+                        <h3>🇸🇪 Svensk</h3>
+                        <audio id="audio-sv" controls></audio>
+                        <a class="btn btn-ghost btn-sm" id="dl-sv" download>Last ned</a>
+                        <p class="dual-text" id="text-sv"></p>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <!-- LOGG -->
+        <div class="log" id="log" aria-live="polite">› Klar.</div>
+    </main>
+
+    <!-- INNSTILLINGER (modal) -->
+    <div class="modal-overlay" id="settings-modal" hidden>
+        <div class="modal">
+            <h2>Innstillinger</h2>
+            <label for="api-key">OpenRouter API-nøkkel</label>
+            <input type="password" id="api-key" placeholder="sk-or-v1-…" autocomplete="off">
+            <p class="muted small">Lagres kun lokalt i nettleseren din (localStorage). Brukes til Gemini-oversettelse og premium-stemmer.</p>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" id="settings-cancel">Lukk</button>
+                <button class="btn btn-primary" id="settings-save">Lagre</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
