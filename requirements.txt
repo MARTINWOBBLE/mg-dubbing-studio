@@ -1,20 +1,23 @@
 # Full installasjon (inkl. lokale ML-modeller)
 # Web-laget alene: se requirements-web.txt
-fastapi
-uvicorn[standard]
-python-multipart
-python-dotenv
-requests
+
+# Web-lag (pinnet til testede versjoner)
+fastapi==0.138.2
+uvicorn[standard]==0.49.0
+python-multipart==0.0.32
+python-dotenv==1.2.2
+requests==2.34.2
 
 # Media
-moviepy
-pydub
+moviepy==2.2.1
+pydub==0.25.1
 
 # Tekst-til-tale (gratis, ingen nøkkel)
-edge-tts
+edge-tts==7.2.8
 
-# Lokale modeller (transkribering + oversettelse)
-torch
-transformers
-sentencepiece
-librosa
+# Lokale modeller (transkribering + oversettelse).
+# Minimumsversjoner – disse er tunge og plattform-/CUDA-avhengige, så de pinnes med gulv.
+torch>=2.2
+transformers>=4.40
+sentencepiece>=0.2
+librosa>=0.10

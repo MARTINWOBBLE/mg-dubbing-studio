@@ -18,13 +18,14 @@
         </div>
         <div class="topbar-right">
             <span id="health-pill" class="pill pill-muted">Sjekker miljø…</span>
+            <button id="reset-btn" class="icon-btn" title="Start på nytt" aria-label="Start på nytt">↺</button>
             <button id="settings-btn" class="icon-btn" title="Innstillinger" aria-label="Innstillinger">⚙</button>
         </div>
     </header>
 
-    <nav class="tabs">
-        <button class="tab active" data-tab="dub">🎬 Dubb video</button>
-        <button class="tab" data-tab="dual">🔊 Tospråklig voiceover</button>
+    <nav class="tabs" role="tablist" aria-label="Verktøy">
+        <button class="tab active" id="tabbtn-dub" data-tab="dub" role="tab" aria-selected="true" aria-controls="tab-dub">🎬 Dubb video</button>
+        <button class="tab" id="tabbtn-dual" data-tab="dual" role="tab" aria-selected="false" aria-controls="tab-dual" tabindex="-1">🔊 Tospråklig voiceover</button>
     </nav>
 
     <main class="container">
@@ -32,7 +33,7 @@
         <div id="cap-banner" class="banner banner-info" hidden></div>
 
         <!-- ============ TAB: DUBB VIDEO ============ -->
-        <section id="tab-dub" class="tab-panel active">
+        <section id="tab-dub" class="tab-panel active" role="tabpanel" aria-labelledby="tabbtn-dub">
             <!-- STEG 1 -->
             <article class="step card" id="step-1" data-state="active">
                 <div class="step-head">
@@ -41,8 +42,8 @@
                     <span class="badge" id="badge-1">Klar</span>
                 </div>
                 <p class="muted">Last opp den norske videoveiledningen du vil dubbe til svensk.</p>
-                <div class="dropzone" id="dropzone">
-                    <div class="dropzone-icon">⬆</div>
+                <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Last opp video: slipp en MP4 her eller trykk Enter for å velge fil">
+                    <div class="dropzone-icon" aria-hidden="true">⬆</div>
                     <div><strong>Slipp MP4 her</strong> eller klikk for å velge</div>
                     <input type="file" id="video-input" accept="video/mp4,video/*" hidden>
                 </div>
@@ -51,7 +52,8 @@
                     <button class="btn btn-primary" id="btn-transcribe" disabled>Start transkribering</button>
                     <button class="btn btn-ghost" id="btn-expert">Ekspertmodus: hopp til redigering</button>
                 </div>
-                <div class="status" id="status-1" hidden></div>
+                <p class="hint muted small" id="hint-1" hidden>Transkribering kan ta noen minutter. Første gang lastes språkmodellen ned (flere hundre MB).</p>
+                <div class="status" id="status-1" role="status" aria-live="polite" hidden></div>
             </article>
 
             <!-- STEG 2 -->
@@ -73,8 +75,9 @@
                 </div>
                 <div class="step-actions">
                     <button class="btn btn-primary" id="btn-translate" disabled>Oversett til svensk</button>
+                    <button class="btn btn-ghost" id="btn-dl-no" hidden>⬇ Last ned norsk tekst</button>
                 </div>
-                <div class="status" id="status-2" hidden></div>
+                <div class="status" id="status-2" role="status" aria-live="polite" hidden></div>
             </article>
 
             <!-- STEG 3 -->
@@ -85,7 +88,7 @@
                     <span class="badge" id="badge-3">Låst</span>
                 </div>
                 <p class="muted">Se over og rediger den svenske teksten før lyden genereres.</p>
-                <textarea id="sv-edit" class="code-area" spellcheck="false" placeholder="Svensk transkripsjon (JSON) vises her…"></textarea>
+                <textarea id="sv-edit" class="code-area" spellcheck="false" aria-label="Svensk transkripsjon (JSON)" placeholder="Svensk transkripsjon (JSON) vises her…"></textarea>
 
                 <div class="field-grid">
                     <div class="field-row">
@@ -100,18 +103,20 @@
                 <div id="openrouter-tts" class="subpanel" hidden>
                     <div class="field-row">
                         <label for="or-model">OpenRouter modell-ID</label>
-                        <input type="text" id="or-model" value="google/gemini-3.1-flash-tts-preview">
+                        <input type="text" id="or-model" value="">
                     </div>
                     <div class="field-row">
                         <label for="or-voice">Stemmenavn</label>
-                        <input type="text" id="or-voice" value="Achird">
+                        <input type="text" id="or-voice" value="">
                     </div>
                 </div>
 
                 <div class="step-actions">
                     <button class="btn btn-primary" id="btn-dub" disabled>Generer dubbet video</button>
+                    <button class="btn btn-ghost" id="btn-dl-sv" hidden>⬇ Last ned svensk JSON</button>
                 </div>
-                <div class="status" id="status-3" hidden></div>
+                <p class="hint muted small">Full dubbing av en lang video kan ta flere minutter. Testmodus er raskest.</p>
+                <div class="status" id="status-3" role="status" aria-live="polite" hidden></div>
             </article>
 
             <!-- RESULTAT -->
@@ -123,12 +128,13 @@
                 <video id="result-video" controls></video>
                 <div class="step-actions">
                     <a class="btn btn-primary" id="btn-download" download>⬇ Last ned svensk video</a>
+                    <button class="btn btn-ghost" id="btn-restart">Start på nytt</button>
                 </div>
             </article>
         </section>
 
         <!-- ============ TAB: TOSPRÅKLIG VOICEOVER ============ -->
-        <section id="tab-dual" class="tab-panel">
+        <section id="tab-dual" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-dual" hidden>
             <article class="step card" data-state="active">
                 <div class="step-head">
                     <span class="step-num">♪</span>
@@ -139,21 +145,21 @@
                     <button class="btn btn-ghost" id="btn-load-json">Last opp JSON-fil</button>
                     <input type="file" id="dual-json-input" accept="application/json" hidden>
                 </div>
-                <textarea id="dual-json" class="code-area" spellcheck="false" placeholder='{ "chunks": [ { "text": "…" } ] }  eller  { "text": "…" }'></textarea>
+                <textarea id="dual-json" class="code-area" spellcheck="false" aria-label="Transkripsjon (JSON)" placeholder='{ "chunks": [ { "text": "…" } ] }  eller  { "text": "…" }'></textarea>
                 <div class="field-grid">
                     <div class="field-row">
                         <label for="dual-voice">Stemme (OpenRouter)</label>
-                        <input type="text" id="dual-voice" value="Puck">
+                        <input type="text" id="dual-voice" value="">
                     </div>
                     <div class="field-row">
                         <label for="dual-model">Modell-ID</label>
-                        <input type="text" id="dual-model" value="google/gemini-3.1-flash-tts-preview">
+                        <input type="text" id="dual-model" value="">
                     </div>
                 </div>
                 <div class="step-actions">
                     <button class="btn btn-primary" id="btn-dual">Generer NO + SV lyd</button>
                 </div>
-                <div class="status" id="status-dual" hidden></div>
+                <div class="status" id="status-dual" role="status" aria-live="polite" hidden></div>
 
                 <div id="dual-result" class="dual-result" hidden>
                     <div class="dual-col">
@@ -173,13 +179,13 @@
         </section>
 
         <!-- LOGG -->
-        <div class="log" id="log" aria-live="polite">› Klar.</div>
+        <div class="log" id="log" role="log" aria-live="polite">› Klar.</div>
     </main>
 
     <!-- INNSTILLINGER (modal) -->
     <div class="modal-overlay" id="settings-modal" hidden>
-        <div class="modal">
-            <h2>Innstillinger</h2>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <h2 id="settings-title">Innstillinger</h2>
             <label for="api-key">OpenRouter API-nøkkel</label>
             <input type="password" id="api-key" placeholder="sk-or-v1-…" autocomplete="off">
             <p class="muted small">Lagres kun lokalt i nettleseren din (localStorage). Brukes til Gemini-oversettelse og premium-stemmer.</p>

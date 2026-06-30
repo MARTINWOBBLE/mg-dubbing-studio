@@ -53,10 +53,25 @@ Alt settes i `.env` (se `.env.example`):
 |----------|-------------|
 | `OPENROUTER_API_KEY` | Valgfri. For Gemini-oversettelse og premium-stemmer. |
 | `FFMPEG_PATH` | Valgfri. Sti til FFmpeg sin `bin`-katalog hvis ikke på PATH. |
+| `HOST` / `PORT` | Bind-adresse og port (kun `python -m app.main`). Standard `127.0.0.1:8080`. |
+| `MAX_UPLOAD_MB` | Maks opplastingsstørrelse. Standard `1024`. |
+| `RETENTION_DAYS` | Slett opplastinger/utdata eldre enn dette ved oppstart. Standard `7`, `0` = aldri. |
+| `EDGE_TTS_TIMEOUT` | Timeout (sek) per Edge-TTS-segment. Standard `120`. |
 | `ASR_MODEL` / `MT_MODEL` | Overstyr standardmodellene. |
+| `OPENROUTER_TRANSLATE_MODEL` | Modell for Gemini-oversettelse. |
+| `OPENROUTER_TTS_MODEL` / `OPENROUTER_TTS_VOICE` | Standard premium-stemme (vises i UI). |
+| `DUAL_VO_VOICE` | Standardstemme for tospråklig voiceover. |
 
 API-nøkkelen kan også legges inn direkte i grensesnittet (⚙) – da lagres den kun
 lokalt i nettleseren (`localStorage`).
+
+### Sikkerhet / nettverk
+
+Verktøyet har **ingen innebygd autentisering**. Lokalt binder det kun til
+`127.0.0.1`. Docker-imaget binder `0.0.0.0` for å være tilgjengelig i containeren –
+hvis du eksponerer porten på et delt nettverk, sett det bak en autentisert
+reverse-proxy eller begrens tilgangen. Gamle opplastinger/utdata ryddes automatisk
+etter `RETENTION_DAYS`.
 
 ## Arkitektur
 

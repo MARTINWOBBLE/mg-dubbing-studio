@@ -101,6 +101,7 @@ body {
 }
 .banner-info { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
 .banner-warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.banner-ok { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
 
 /* ===== Cards / steps ===== */
 .card {
@@ -148,6 +149,7 @@ body {
     color: var(--muted);
 }
 .dropzone:hover, .dropzone.drag { border-color: var(--brand-blue); background: #eff6ff; color: var(--text); }
+.dropzone:focus-visible { outline: 2px solid var(--brand-blue); outline-offset: 3px; }
 .dropzone-icon { font-size: 1.6rem; color: var(--brand-blue); margin-bottom: .4rem; }
 .file-info {
     margin-top: .9rem; padding: .6rem .85rem;
@@ -216,6 +218,8 @@ select:focus, input:focus { border-color: var(--brand-blue); box-shadow: 0 0 0 3
     border: 2px solid #bfdbfe; border-top-color: var(--brand-blue);
     border-radius: 50%; animation: spin .8s linear infinite;
 }
+.elapsed { margin-left: auto; font-variant-numeric: tabular-nums; opacity: .7; font-size: .8rem; }
+.hint { margin-top: .6rem; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ===== Transcript preview ===== */

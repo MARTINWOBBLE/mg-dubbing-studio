@@ -1,0 +1,25 @@
+# Virtuelt miljø og caches (skal ALDRI inn i imaget)
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Git og editor
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Hemmeligheter
+.env
+
+# Bruker-/genererte mediefiler
+uploads/*
+output/*
+!uploads/.gitkeep
+!output/.gitkeep
+
+# Dokumentasjon/utvikling
+start-dev.cmd
+*.md

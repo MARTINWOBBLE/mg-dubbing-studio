@@ -3,19 +3,27 @@
 Alle tunge avhengigheter (torch, transformers, moviepy, pydub, edge_tts) importeres
 *inne i* funksjonene. Det gjør at web-serveren og /api/health starter selv om de
 maskinlæringsbibliotekene ikke er installert ennå.
+
+Funksjonene her er synkrone og tunge. Endepunktene i main.py er derfor vanlige `def`
+slik at FastAPI kjører dem i en threadpool og ikke blokkerer event-loopen.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
 import requests
 
 from . import config
+
+logger = logging.getLogger("mg_dubbing")
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +72,7 @@ def _get_asr():
         from transformers import pipeline
 
         dev = _device()
-        print(f"[ASR] Laster {config.ASR_MODEL} på {dev} ...", flush=True)
+        logger.info("Laster ASR-modell %s på %s", config.ASR_MODEL, dev)
         _asr_pipe = pipeline(
             "automatic-speech-recognition",
             model=config.ASR_MODEL,
@@ -80,10 +88,34 @@ def _get_mt():
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
         dev = _device()
-        print(f"[MT] Laster {config.MT_MODEL} på {dev} ...", flush=True)
+        logger.info("Laster oversettelsesmodell %s på %s", config.MT_MODEL, dev)
         _mt_tokenizer = AutoTokenizer.from_pretrained(config.MT_MODEL)
         _mt_model = AutoModelForSeq2SeqLM.from_pretrained(config.MT_MODEL).to(dev)
     return _mt_model, _mt_tokenizer
+
+
+# ---------------------------------------------------------------------------
+# Tidsstempel-hjelpere (robuste mot None / manglende felt fra Whisper)
+# ---------------------------------------------------------------------------
+def _seg_start_ms(chunk: dict, index: int) -> int:
+    ts = chunk.get("timestamp")
+    if not isinstance(ts, (list, tuple)) or len(ts) < 1 or ts[0] is None:
+        raise PipelineError(
+            f"Segment {index + 1} mangler gyldig starttidspunkt i «timestamp» [start, slutt]."
+        )
+    return int(float(ts[0]) * 1000)
+
+
+def _last_end_seconds(chunks: list, video_duration: float) -> float:
+    """Sluttid for siste segment. Whisper lar ofte siste end-stempel være None."""
+    end = None
+    if chunks:
+        ts = chunks[-1].get("timestamp")
+        if isinstance(ts, (list, tuple)) and len(ts) >= 2 and ts[1] is not None:
+            end = float(ts[1])
+    if end is None or end <= 0:
+        end = video_duration
+    return max(1.0, min(end + 2.0, video_duration))
 
 
 # ---------------------------------------------------------------------------
@@ -100,16 +132,14 @@ def transcribe_video(video_path: Path) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise PipelineError(f"moviepy mangler eller FFmpeg er ikke tilgjengelig: {exc}")
 
-    tmp_audio = config.UPLOAD_DIR / "_temp_transcribe.wav"
+    tmp_audio = config.UPLOAD_DIR / f"_temp_transcribe_{uuid.uuid4().hex[:8]}.wav"
     try:
-        clip = VideoFileClip(str(video_path))
-        if clip.audio is None:
-            clip.close()
-            raise PipelineError("Videoen har ingen lydspor å transkribere.")
-        clip.audio.write_audiofile(
-            str(tmp_audio), fps=16000, nbytes=2, codec="pcm_s16le", logger=None
-        )
-        clip.close()
+        with VideoFileClip(str(video_path)) as clip:
+            if clip.audio is None:
+                raise PipelineError("Videoen har ingen lydspor å transkribere.")
+            clip.audio.write_audiofile(
+                str(tmp_audio), fps=16000, nbytes=2, codec="pcm_s16le", logger=None
+            )
 
         pipe = _get_asr()
         result = pipe(
@@ -120,7 +150,10 @@ def transcribe_video(video_path: Path) -> dict:
         return result
     finally:
         if tmp_audio.exists():
-            tmp_audio.unlink()
+            try:
+                tmp_audio.unlink()
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +174,7 @@ def translate_local(data: dict) -> dict:
         text = (chunk.get("text") or "").strip()
         if not text:
             continue
-        inputs = tokenizer(text, return_tensors="pt", truncation=True).to(dev)
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(dev)
         with torch.no_grad():
             generated = model.generate(**inputs, max_length=512)
         chunk["text"] = tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
@@ -176,7 +209,18 @@ def _openrouter_chat(text: str, api_key: str, model: str) -> str:
     )
     if resp.status_code != 200:
         raise PipelineError(f"OpenRouter-oversettelse feilet ({resp.status_code}): {resp.text[:300]}")
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    try:
+        body = resp.json()
+    except ValueError:
+        raise PipelineError("OpenRouter ga et ugyldig (ikke-JSON) svar.")
+    choices = body.get("choices")
+    if not choices:
+        detail = body.get("error") or body
+        raise PipelineError(f"OpenRouter ga uventet svar: {str(detail)[:300]}")
+    content = (choices[0].get("message") or {}).get("content")
+    if not content:
+        raise PipelineError("OpenRouter returnerte et tomt svar.")
+    return content.strip()
 
 
 def translate_openrouter(data: dict, api_key: str, model: Optional[str] = None) -> dict:
@@ -195,10 +239,22 @@ def translate_openrouter(data: dict, api_key: str, model: Optional[str] = None) 
 # ---------------------------------------------------------------------------
 # 3) Dubbing: svensk transkripsjon + originalvideo -> dubbet video
 # ---------------------------------------------------------------------------
-async def _tts_segment_edge(text: str, voice: str, out_mp3: str) -> None:
+def _edge_save_sync(text: str, voice: str, out_mp3: str) -> None:
+    import asyncio
+
     import edge_tts
 
-    await edge_tts.Communicate(text, voice).save(out_mp3)
+    async def _run():
+        await asyncio.wait_for(
+            edge_tts.Communicate(text, voice).save(out_mp3), timeout=config.EDGE_TTS_TIMEOUT
+        )
+
+    try:
+        asyncio.run(_run())
+    except asyncio.TimeoutError as exc:
+        raise PipelineError(
+            "Edge-TTS (Microsoft) svarte ikke i tide. Prøv igjen eller bytt til OpenRouter-stemme."
+        ) from exc
 
 
 def _tts_segment_openrouter(text: str, api_key: str, model: str, voice: str) -> bytes:
@@ -217,14 +273,14 @@ def _tts_segment_openrouter(text: str, api_key: str, model: str, voice: str) -> 
     return resp.content
 
 
-async def dub_video(
+def dub_video(
     data: dict,
     video_path: Path,
     voice: str,
     test_mode: bool = False,
     api_key: str = "",
-    openrouter_model: str = "google/gemini-3.1-flash-tts-preview",
-    openrouter_voice: str = "Achird",
+    openrouter_model: str = "",
+    openrouter_voice: str = "",
     output_name: str = "dubbet.mp4",
 ) -> str:
     caps = check_capabilities()
@@ -233,6 +289,9 @@ async def dub_video(
 
     from moviepy import AudioFileClip, VideoFileClip
     from pydub import AudioSegment
+
+    openrouter_model = openrouter_model or config.OPENROUTER_TTS_MODEL
+    openrouter_voice = openrouter_voice or config.OPENROUTER_TTS_VOICE
 
     chunks = list(data.get("chunks", []))
     if not chunks:
@@ -249,43 +308,62 @@ async def dub_video(
         raise PipelineError("edge-tts mangler. Installer requirements.txt.")
 
     output_path = config.OUTPUT_DIR / output_name
-    video = VideoFileClip(str(video_path))
+    video = None
     try:
+        video = VideoFileClip(str(video_path))
         full_audio = AudioSegment.silent(duration=int(video.duration * 1000), frame_rate=24000)
+
         with tempfile.TemporaryDirectory() as tmp:
             for i, chunk in enumerate(chunks):
                 text = (chunk.get("text") or "").strip()
                 if not text:
                     continue
-                start_ms = int(chunk["timestamp"][0] * 1000)
+                start_ms = _seg_start_ms(chunk, i)
                 if use_openrouter:
                     pcm = _tts_segment_openrouter(text, api_key, openrouter_model, openrouter_voice)
                     seg = AudioSegment(data=pcm, sample_width=2, frame_rate=24000, channels=1)
                 else:
                     seg_path = os.path.join(tmp, f"seg_{i}.mp3")
-                    await _tts_segment_edge(text, voice, seg_path)
+                    _edge_save_sync(text, voice, seg_path)
                     seg = AudioSegment.from_mp3(seg_path)
                 full_audio = full_audio.overlay(seg, position=start_ms)
 
-            if test_mode and chunks:
-                last_end_ms = int((chunks[-1]["timestamp"][1] + 2.0) * 1000)
-                full_audio = full_audio[:last_end_ms]
-                video = video.subclipped(0, min(last_end_ms / 1000.0, video.duration))
+            if test_mode:
+                last_end_s = _last_end_seconds(chunks, video.duration)
+                full_audio = full_audio[: int(last_end_s * 1000)]
+                video = video.subclipped(0, last_end_s)
 
             mixed = os.path.join(tmp, "mixed.wav")
             full_audio.export(mixed, format="wav")
-            final = video.with_audio(AudioFileClip(mixed))
-            final.write_videofile(
-                str(output_path),
-                codec="libx264",
-                audio_codec="aac",
-                preset="ultrafast",
-                threads=4,
-                logger=None,
-            )
-            final.close()
+
+            # Lukk lyd-/sluttklipp FØR temp-katalogen ryddes (unngår Windows-PermissionError
+            # som ellers maskerer den egentlige feilen).
+            audio_clip = None
+            final = None
+            try:
+                audio_clip = AudioFileClip(mixed)
+                final = video.with_audio(audio_clip)
+                final.write_videofile(
+                    str(output_path),
+                    codec="libx264",
+                    audio_codec="aac",
+                    preset="ultrafast",
+                    threads=4,
+                    logger=None,
+                )
+            finally:
+                for clip in (final, audio_clip):
+                    if clip is not None:
+                        try:
+                            clip.close()
+                        except Exception:  # noqa: BLE001
+                            pass
     finally:
-        video.close()
+        if video is not None:
+            try:
+                video.close()
+            except Exception:  # noqa: BLE001
+                pass
     return output_name
 
 
@@ -303,8 +381,8 @@ def _extract_plain_text(data: dict) -> str:
 def dual_voiceover(
     data: dict,
     api_key: str,
-    model_id: str = "google/gemini-3.1-flash-tts-preview",
-    voice: str = "Puck",
+    model_id: str = "",
+    voice: str = "",
 ) -> dict:
     """Lager én norsk og én svensk lydfil av samme manus via OpenRouter TTS."""
     api_key = (api_key or config.OPENROUTER_API_KEY).strip()
@@ -315,21 +393,24 @@ def dual_voiceover(
 
     from pydub import AudioSegment
 
+    model_id = model_id or config.OPENROUTER_TTS_MODEL
+    voice = voice or config.DUAL_VO_VOICE
+
     text_no = _extract_plain_text(data)
     if not text_no:
         raise PipelineError("Fant ingen tekst i JSON-fila.")
 
     text_sv = _openrouter_chat(text_no, api_key, config.DEFAULT_OPENROUTER_TRANSLATE_MODEL)
+    uid = uuid.uuid4().hex[:8]
 
     def synth(text: str, name: str) -> str:
         pcm = _tts_segment_openrouter(text, api_key, model_id, voice)
         seg = AudioSegment(data=pcm, sample_width=2, frame_rate=24000, channels=1)
-        out = config.OUTPUT_DIR / name
-        seg.export(str(out), format="mp3")
+        seg.export(str(config.OUTPUT_DIR / name), format="mp3")
         return name
 
-    file_no = synth(text_no, f"vo_no_{voice}.mp3")
-    file_sv = synth(text_sv, f"vo_sv_{voice}.mp3")
+    file_no = synth(text_no, f"vo_no_{voice}_{uid}.mp3")
+    file_sv = synth(text_sv, f"vo_sv_{voice}_{uid}.mp3")
     return {
         "norwegian_text": text_no,
         "swedish_text": text_sv,
@@ -339,13 +420,29 @@ def dual_voiceover(
 
 
 # ---------------------------------------------------------------------------
-# Hjelpere for lagring
+# Hjelpere for lagring og opprydding
 # ---------------------------------------------------------------------------
 def save_upload(file_obj, filename: str) -> Path:
-    safe = os.path.basename(filename)
+    safe = os.path.basename(filename) or f"upload_{uuid.uuid4().hex[:8]}"
     dest = config.UPLOAD_DIR / safe
+    limit = config.MAX_UPLOAD_MB * 1024 * 1024
+    written = 0
     with open(dest, "wb") as buf:
-        shutil.copyfileobj(file_obj, buf)
+        while True:
+            chunk = file_obj.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if limit and written > limit:
+                buf.close()
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+                raise PipelineError(
+                    f"Filen er for stor (over grensen på {config.MAX_UPLOAD_MB} MB)."
+                )
+            buf.write(chunk)
     return dest
 
 
@@ -354,3 +451,25 @@ def save_json(data: dict, filename: str) -> Path:
     with open(dest, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return dest
+
+
+def cleanup_old_files(days: Optional[int] = None) -> int:
+    """Slett opplastinger/utdata eldre enn `days` dager. 0/None = ingen opprydding."""
+    days = config.RETENTION_DAYS if days is None else days
+    if not days or days <= 0:
+        return 0
+    cutoff = time.time() - days * 86400
+    removed = 0
+    for directory in (config.UPLOAD_DIR, config.OUTPUT_DIR):
+        for path in directory.iterdir():
+            if path.name == ".gitkeep" or not path.is_file():
+                continue
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    if removed:
+        logger.info("Opprydding: slettet %d gamle filer (eldre enn %d dager)", removed, days)
+    return removed

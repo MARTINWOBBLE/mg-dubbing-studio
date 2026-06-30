@@ -2,12 +2,23 @@
 const $ = (id) => document.getElementById(id);
 const API_KEY_STORE = "mg_dubbing_openrouter_key";
 
+const FALLBACK_VOICES = [
+    { id: "sv-SE-SofieNeural", label: "Sofie (kvinne)" },
+    { id: "sv-SE-HilleviNeural", label: "Hillevi (kvinne)" },
+    { id: "sv-SE-MattiasNeural", label: "Mattias (mann)" },
+];
+
 const state = {
-    videoName: null,
     videoFile: null,
+    videoName: null,
+    stem: "video",
+    noFile: null,
     svFile: null,
+    noText: "",
     capabilities: {},
 };
+
+let elapsedTimer = null;
 
 /* ---------- Logg & status ---------- */
 function log(msg) {
@@ -16,15 +27,29 @@ function log(msg) {
     el.textContent += `\n› ${t}  ${msg}`;
     el.scrollTop = el.scrollHeight;
 }
+function stopElapsed() {
+    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+}
 function setStatus(id, kind, msg) {
     const el = $(id);
     el.hidden = false;
     el.className = "status" + (kind === "error" ? " error" : kind === "ok" ? " ok" : "");
-    el.innerHTML = kind === "loading"
-        ? `<span class="spinner"></span><span>${msg}</span>`
-        : `<span>${msg}</span>`;
+    if (kind === "loading") {
+        const started = Date.now();
+        const render = () => {
+            const s = Math.floor((Date.now() - started) / 1000);
+            const m = Math.floor(s / 60);
+            el.innerHTML = `<span class="spinner"></span><span>${msg}</span><span class="elapsed">${m}:${String(s % 60).padStart(2, "0")}</span>`;
+        };
+        stopElapsed();
+        render();
+        elapsedTimer = setInterval(render, 1000);
+    } else {
+        stopElapsed();
+        el.innerHTML = `<span>${msg}</span>`;
+    }
 }
-function hide(id) { $(id).hidden = true; }
+function hide(id) { stopElapsed(); $(id).hidden = true; }
 function setStep(id, st) { $(id).dataset.state = st; }
 function setBadge(id, text) { $(id).textContent = text; }
 
@@ -41,7 +66,20 @@ async function loadHealth() {
     } catch (e) {
         $("health-pill").textContent = "Server utilgjengelig";
         $("health-pill").className = "pill pill-warn";
+        buildVoiceList(FALLBACK_VOICES);
     }
+}
+function buildVoiceList(voices) {
+    const sel = $("voice-select");
+    sel.innerHTML = "";
+    (voices && voices.length ? voices : FALLBACK_VOICES).forEach((v) => {
+        const o = document.createElement("option");
+        o.value = v.id; o.textContent = `${v.label} · Edge (gratis)`;
+        sel.appendChild(o);
+    });
+    const orOpt = document.createElement("option");
+    orOpt.value = "openrouter_api"; orOpt.textContent = "Premium (OpenRouter/Gemini)";
+    sel.appendChild(orOpt);
 }
 function renderHealth(data) {
     const c = data.capabilities || {};
@@ -50,19 +88,29 @@ function renderHealth(data) {
     pill.textContent = ready ? `Klar · v${data.version}` : "Begrenset miljø";
     pill.className = "pill " + (ready ? "pill-ok" : "pill-warn");
 
-    // Bygg stemmeliste
-    const sel = $("voice-select");
-    sel.innerHTML = "";
-    (data.edge_voices || []).forEach((v) => {
-        const o = document.createElement("option");
-        o.value = v.id; o.textContent = `${v.label} · Edge (gratis)`;
-        sel.appendChild(o);
-    });
-    const orOpt = document.createElement("option");
-    orOpt.value = "openrouter_api"; orOpt.textContent = "Premium (OpenRouter/Gemini)";
-    sel.appendChild(orOpt);
+    buildVoiceList(data.edge_voices);
 
-    // Kapabilitets-banner
+    // Fyll standardverdier for modell/stemme fra serveren
+    if (data.tts_model) { $("or-model").value = data.tts_model; $("dual-model").value = data.tts_model; }
+    if (data.tts_voice) $("or-voice").value = data.tts_voice;
+    if (data.dual_voice) $("dual-voice").value = data.dual_voice;
+
+    // Merk lokal oversetter som utilgjengelig hvis modellene mangler
+    const localOpt = $("translate-engine").querySelector('option[value="local"]');
+    if (localOpt) {
+        if (!c.local_mt) {
+            localOpt.textContent = "Lokal modell (ikke installert)";
+            localOpt.disabled = true;
+            if ($("translate-engine").value === "local" && c.openrouter_key) {
+                $("translate-engine").value = "openrouter";
+            }
+        } else {
+            localOpt.textContent = "Lokal modell (Helsinki-NLP · gratis)";
+            localOpt.disabled = false;
+        }
+    }
+
+    // Banner: vis advarsler ELLER en positiv «alt klart»-melding
     const warnings = [];
     if (!c.ffmpeg) warnings.push("FFmpeg mangler – transkribering og dubbing vil ikke fungere.");
     if (!c.local_asr) warnings.push("Lokale modeller er ikke installert – transkribering krever «pip install -r requirements.txt».");
@@ -73,37 +121,104 @@ function renderHealth(data) {
         banner.className = "banner banner-warn";
         banner.innerHTML = "<strong>Merk:</strong> " + warnings.join(" ");
     } else {
-        banner.hidden = true;
+        banner.hidden = false;
+        banner.className = "banner banner-ok";
+        const tts = c.edge_tts ? "Edge-TTS ✓" : "";
+        const key = c.openrouter_key ? "OpenRouter ✓" : "";
+        banner.innerHTML = `<strong>Alt klart.</strong> FFmpeg ✓ · lokale modeller ✓ ${tts ? "· " + tts : ""} ${key ? "· " + key : ""}`.trim();
     }
 }
 
-/* ---------- Faner ---------- */
-document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-        document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-        document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-        tab.classList.add("active");
-        $("tab-" + tab.dataset.tab).classList.add("active");
+/* ---------- Faner (ARIA + tastatur) ---------- */
+function activateTab(name) {
+    document.querySelectorAll(".tab").forEach((t) => {
+        const on = t.dataset.tab === name;
+        t.classList.toggle("active", on);
+        t.setAttribute("aria-selected", on ? "true" : "false");
+        t.tabIndex = on ? 0 : -1;
     });
+    document.querySelectorAll(".tab-panel").forEach((p) => {
+        const on = p.id === "tab-" + name;
+        p.classList.toggle("active", on);
+        p.hidden = !on;
+    });
+}
+document.querySelectorAll(".tab").forEach((tab) => {
+    tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+});
+$("tabbtn-dub").parentElement.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const tabs = [...document.querySelectorAll(".tab")];
+    const i = tabs.findIndex((t) => t.getAttribute("aria-selected") === "true");
+    const next = e.key === "ArrowRight" ? (i + 1) % tabs.length : (i - 1 + tabs.length) % tabs.length;
+    activateTab(tabs[next].dataset.tab);
+    tabs[next].focus();
 });
 
 /* ---------- Innstillinger-modal ---------- */
-$("settings-btn").addEventListener("click", () => {
-    $("api-key").value = getKey();
-    $("settings-modal").hidden = false;
-});
-$("settings-cancel").addEventListener("click", () => ($("settings-modal").hidden = true));
+function openModal() { $("api-key").value = getKey(); $("settings-modal").hidden = false; $("api-key").focus(); }
+function closeModal() { $("settings-modal").hidden = true; $("settings-btn").focus(); }
+$("settings-btn").addEventListener("click", openModal);
+$("settings-cancel").addEventListener("click", closeModal);
 $("settings-save").addEventListener("click", () => {
     localStorage.setItem(API_KEY_STORE, $("api-key").value.trim());
     $("settings-modal").hidden = true;
     log("API-nøkkel lagret lokalt.");
     loadHealth();
 });
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("settings-modal").hidden) closeModal();
+});
+$("settings-modal").addEventListener("click", (e) => {
+    if (e.target === $("settings-modal")) closeModal();
+});
+
+/* ---------- Nullstilling ---------- */
+function resetAll() {
+    stopElapsed();
+    state.videoFile = null; state.videoName = null; state.stem = "video";
+    state.noFile = null; state.svFile = null; state.noText = "";
+    $("video-input").value = "";
+    $("video-info").hidden = true;
+    $("btn-transcribe").disabled = true;
+    $("btn-translate").disabled = true;
+    $("btn-dub").disabled = true;
+    $("btn-dl-no").hidden = true;
+    $("btn-dl-sv").hidden = true;
+    $("hint-1").hidden = true;
+    $("no-preview").innerHTML = '<div class="placeholder">Fullfør steg 1 for å se transkripsjonen.</div>';
+    $("sv-edit").value = "";
+    $("result-card").hidden = true;
+    ["status-1", "status-2", "status-3", "status-dual"].forEach(hide);
+    setStep("step-1", "active"); setBadge("badge-1", "Klar");
+    setStep("step-2", "locked"); setBadge("badge-2", "Låst");
+    setStep("step-3", "locked"); setBadge("badge-3", "Låst");
+    $("log").textContent = "› Klar.";
+    activateTab("dub");
+    log("Nullstilt.");
+}
+$("reset-btn").addEventListener("click", resetAll);
+$("btn-restart").addEventListener("click", resetAll);
+
+/* ---------- Nedlastingshjelper ---------- */
+function downloadText(filename, text, mime) {
+    const blob = new Blob([text], { type: mime || "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+$("btn-dl-no").addEventListener("click", () => downloadText(`${state.stem}_no.txt`, state.noText || ""));
+$("btn-dl-sv").addEventListener("click", () => downloadText(`${state.stem}_sv.json`, $("sv-edit").value, "application/json"));
 
 /* ---------- Steg 1: video ---------- */
 const dropzone = $("dropzone");
 const videoInput = $("video-input");
 dropzone.addEventListener("click", () => videoInput.click());
+dropzone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); videoInput.click(); }
+});
 ["dragover", "dragenter"].forEach((ev) =>
     dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("drag"); }));
 ["dragleave", "drop"].forEach((ev) =>
@@ -114,16 +229,25 @@ videoInput.addEventListener("change", (e) => { if (e.target.files[0]) selectVide
 function selectVideo(file) {
     state.videoFile = file;
     state.videoName = file.name;
+    state.stem = file.name.replace(/\.[^.]+$/, "");
     const info = $("video-info");
     info.hidden = false;
     info.textContent = `🎞 ${file.name} (${(file.size / 1048576).toFixed(1)} MB)`;
     $("btn-transcribe").disabled = false;
+    $("hint-1").hidden = false;
     log(`Video valgt: ${file.name}`);
 }
 
 /* ---------- Steg 1 → 2: transkribering ---------- */
 $("btn-transcribe").addEventListener("click", async () => {
     if (!state.videoFile) return;
+    // Nullstill nedstrøms-tilstand ved ny kjøring
+    $("result-card").hidden = true;
+    $("btn-dl-sv").hidden = true;
+    $("sv-edit").value = "";
+    setStep("step-3", "locked"); setBadge("badge-3", "Låst"); $("btn-dub").disabled = true;
+    hide("status-2"); hide("status-3");
+
     $("btn-transcribe").disabled = true;
     setStatus("status-1", "loading", "Transkriberer… dette kan ta noen minutter.");
     log("Starter transkribering…");
@@ -134,11 +258,13 @@ $("btn-transcribe").addEventListener("click", async () => {
         state.svFile = null;
         state.noFile = data.transcript_file;
         state.videoName = data.video_name;
+        state.noText = ((data.transcript && data.transcript.chunks) || []).map((c) => c.text || "").join(" ").trim();
         renderTranscript(data.transcript);
         setStatus("status-1", "ok", "Transkripsjon ferdig.");
         setStep("step-1", "done"); setBadge("badge-1", "Ferdig");
         setStep("step-2", "active"); setBadge("badge-2", "Klar");
         $("btn-translate").disabled = false;
+        $("btn-dl-no").hidden = false;
         log("Transkribering fullført.");
     } catch (e) {
         setStatus("status-1", "error", e.message);
@@ -152,7 +278,7 @@ function renderTranscript(t) {
     const el = $("no-preview");
     if (!chunks.length) { el.innerHTML = '<div class="placeholder">Ingen segmenter funnet.</div>'; return; }
     el.innerHTML = chunks.map((c) =>
-        `<div class="chunk"><span class="chunk-time">${(c.timestamp?.[0] ?? 0).toFixed(1)}s</span><span>${escapeHtml(c.text || "")}</span></div>`
+        `<div class="chunk"><span class="chunk-time">${Number(c.timestamp?.[0] ?? 0).toFixed(1)}s</span><span>${escapeHtml(c.text || "")}</span></div>`
     ).join("");
 }
 
@@ -160,6 +286,7 @@ function renderTranscript(t) {
 $("btn-translate").addEventListener("click", async () => {
     $("btn-translate").disabled = true;
     const engine = $("translate-engine").value;
+    if (engine === "openrouter" && !getKey()) { alert("OpenRouter-oversettelse krever en nøkkel. Legg den inn under ⚙."); $("btn-translate").disabled = false; return; }
     setStatus("status-2", "loading", "Oversetter til svensk…");
     log(`Oversetter (${engine})…`);
     const fd = new FormData();
@@ -173,6 +300,7 @@ $("btn-translate").addEventListener("click", async () => {
         setStatus("status-2", "ok", "Oversettelse ferdig.");
         setStep("step-2", "done"); setBadge("badge-2", "Ferdig");
         unlockDub("Klar");
+        $("btn-dl-sv").hidden = false;
         log("Oversettelse fullført.");
     } catch (e) {
         setStatus("status-2", "error", e.message);
@@ -185,6 +313,7 @@ function unlockDub(badge) {
     setStep("step-3", "active");
     setBadge("badge-3", badge);
     $("btn-dub").disabled = false;
+    $("btn-dl-sv").hidden = false;
 }
 
 /* ---------- Ekspertmodus ---------- */
@@ -204,6 +333,7 @@ $("btn-expert").addEventListener("click", async () => {
         log("Ekspertmodus: video lastet opp, klar for manuell svensk JSON.");
     } catch (e) {
         setStatus("status-1", "error", e.message);
+        log("FEIL: " + e.message);
     }
 });
 
@@ -217,7 +347,9 @@ $("btn-dub").addEventListener("click", async () => {
     const svText = $("sv-edit").value.trim();
     if (!svText) { alert("Mangler svensk transkripsjon."); return; }
     try { JSON.parse(svText); } catch { alert("Den svenske transkripsjonen er ikke gyldig JSON."); return; }
+    if ($("voice-select").value === "openrouter_api" && !getKey()) { alert("Premium-stemme krever en OpenRouter-nøkkel. Legg den inn under ⚙."); return; }
 
+    $("result-card").hidden = true;
     $("btn-dub").disabled = true;
     setStatus("status-3", "loading", "Genererer svensk lyd og setter sammen video…");
     log("Starter dubbing…");
@@ -263,6 +395,7 @@ $("btn-dual").addEventListener("click", async () => {
     try { JSON.parse(txt); } catch { alert("Innholdet er ikke gyldig JSON."); return; }
     if (!getKey()) { alert("Tospråklig voiceover krever en OpenRouter-nøkkel. Legg den inn under ⚙."); return; }
 
+    $("dual-result").hidden = true;
     $("btn-dual").disabled = true;
     setStatus("status-dual", "loading", "Oversetter og genererer norsk + svensk lyd…");
     const fd = new FormData();
@@ -298,7 +431,8 @@ async function postJSON(url, formData) {
     return data;
 }
 function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 /* ---------- Init ---------- */
