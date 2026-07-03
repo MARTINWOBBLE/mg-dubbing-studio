@@ -22,4 +22,5 @@ output/*
 
 # Dokumentasjon/utvikling
 start-dev.cmd
+start.cmd
 *.md

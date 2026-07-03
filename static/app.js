@@ -90,6 +90,7 @@ function renderHealth(data) {
     const ready = c.ffmpeg && (c.local_asr || c.openrouter_key);
     pill.textContent = ready ? `Klar · v${data.version}` : "Begrenset miljø";
     pill.className = "pill " + (ready ? "pill-ok" : "pill-warn");
+    if (data.version) $("footer-version").textContent = `v${data.version}`;
 
     buildVoiceList(data.edge_voices);
 
@@ -116,8 +117,13 @@ function renderHealth(data) {
     // Banner: vis advarsler ELLER en positiv «alt klart»-melding
     const warnings = [];
     if (!c.ffmpeg) warnings.push("FFmpeg mangler – transkribering og dubbing vil ikke fungere.");
-    if (!c.local_asr) warnings.push("Lokale modeller er ikke installert – transkribering krever «pip install -r requirements.txt».");
+    if (!c.local_asr) warnings.push("Lokale modeller er ikke installert – transkribering er derfor slått av. Bruk «Ekspertmodus» med ferdig svensk JSON, eller installer requirements.txt.");
     if (!c.local_mt && !c.openrouter_key) warnings.push("Ingen oversetter tilgjengelig – installer modellene eller legg inn en OpenRouter-nøkkel under ⚙.");
+
+    // Re-evaluer transkriberingsknappen hvis video allerede er valgt
+    if (state.videoFile) {
+        $("btn-transcribe").disabled = !canTranscribe();
+    }
     const banner = $("cap-banner");
     if (warnings.length) {
         banner.hidden = false;
@@ -249,6 +255,10 @@ dropzone.addEventListener("keydown", (e) => {
 dropzone.addEventListener("drop", (e) => { if (e.dataTransfer.files[0]) selectVideo(e.dataTransfer.files[0]); });
 videoInput.addEventListener("change", (e) => { if (e.target.files[0]) selectVideo(e.target.files[0]); });
 
+function canTranscribe() {
+    // Ukjent (health feilet) regnes som mulig – serveren gir uansett en klar feilmelding.
+    return state.capabilities.local_asr !== false;
+}
 function selectVideo(file) {
     state.videoFile = file;
     state.videoName = file.name;
@@ -256,7 +266,10 @@ function selectVideo(file) {
     const info = $("video-info");
     info.hidden = false;
     info.textContent = `🎞 ${file.name} (${(file.size / 1048576).toFixed(1)} MB)`;
-    $("btn-transcribe").disabled = false;
+    $("btn-transcribe").disabled = !canTranscribe();
+    $("btn-transcribe").title = canTranscribe()
+        ? ""
+        : "Lokale modeller er ikke installert – bruk Ekspertmodus, eller installer requirements.txt.";
     $("hint-1").hidden = false;
     log(`Video valgt: ${file.name}`);
 }
